@@ -5,8 +5,8 @@
     "url": "https://github.com/mullapudirohith/pymate.git"
 },
   "displayName": "Pymate",
-  "publisher": "your-publisher",
-  "version": "0.0.1",
+  "publisher": "rcm8445",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.100.0"
   },

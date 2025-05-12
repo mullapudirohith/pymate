@@ -1,33 +1,30 @@
 # Pymate
 
-A VS Code extension integrating Docker Compose management, automated test coverage analysis, test case suggestions, and static code analysis for Python.
+**Pymate** is an all-in-one VS Code extension that brings Docker Compose, testing, AI-driven test suggestions and static analysis right into your editor.
 
-## Setup
+---
 
-1. Install dependencies:
+## 🚀 Features
 
-```bash
-npm install
-pip install -r requirements.txt
-```
+### Docker Compose Integration
+- **Validate** your `docker-compose.yml`  
+- **One-click** start/stop/restart via status-bar buttons or Command Palette  
+- **Interactive** dependency graph (Mermaid)  
+- **Live** resource monitoring panel  
 
-2. Compile the extension:
+### Automated Test Coverage
+- **Run** `pytest --cov` over your entire workspace  
+- **HTML & JSON** coverage reports, opened directly in VS Code  
+- **List** untested functions for deeper insight  
 
-```bash
-npm run compile
-```
+### AI-Driven Test Suggestions
+- **ChatGPT**-powered pytest stub generation  
+- **Project-specific** prompts include your actual function code  
+- **Fallback** listing of untested methods if no API key is set  
 
-3. Launch in VS Code:
+### Static Analysis & Style Enforcement
+- **Pylint** integration (JSON → VS Code diagnostics)  
+- **Regex checkstyle** rules or point to your own `checkstyle.xml`  
+- **Lint-on-open** & **lint-on-save**, with Problems panel feedback  
 
-- Press F5 to start the Extension Development Host.
-
-## Commands
-
-- **Validate Docker Compose File**
-- **Show Docker Compose Dependency Graph**
-- **Manage Docker Containers**
-- **Monitor Docker Resources**
-- **Run Tests and Coverage**
-- **Suggest Test Cases**
-
-Configure your OpenAI API key in VS Code settings under `pymate.openaiApiKey` for test suggestions.
+---
