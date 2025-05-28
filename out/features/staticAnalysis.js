@@ -27,84 +27,81 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.lintDocument = void 0;
 const vscode = __importStar(require("vscode"));
 const cp = __importStar(require("child_process"));
-const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const fast_xml_parser_1 = require("fast-xml-parser");
-const DEFAULT_CHECKSTYLE = path.join(__dirname, '..', '..', 'checkstyle.xml');
-const PMD_RULESET = path.join(__dirname, '..', '..', 'pmd-ruleset.xml');
-const PMD_PYTHON_PLUGIN = path.join(__dirname, '..', '..', 'lib', 'pmd-python-plugin.jar');
+/** Parse JSON from Pylint and XML from Checkstyle */
 function parseXml(xml) {
     return new fast_xml_parser_1.XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' }).parse(xml);
 }
+/** Turn a finding into a VS Code Diagnostic */
 function toDiagnostic(uri, line, col, msg, severity, source) {
-    const range = new vscode.Range(line - 1, col - 1, line - 1, col);
-    const d = new vscode.Diagnostic(range, msg, severity);
+    const rng = new vscode.Range(line - 1, col - 1, line - 1, col);
+    const d = new vscode.Diagnostic(rng, msg, severity);
     d.source = source;
     return d;
 }
 function lintDocument(doc, collection) {
     if (doc.languageId !== 'python')
         return;
-    // clear old
+    const file = doc.uri.fsPath;
+    // 1) Clear old issues  
     collection.set(doc.uri, []);
+    // 2) Show output for debugging  
     const out = vscode.window.createOutputChannel('Pymate Static');
     out.show(true);
-    out.appendLine(`\n🧹 Linting ${doc.uri.fsPath}`);
-    runPmd(doc, collection, out);
+    out.appendLine(`\n🧹 Linting ${file}`);
+    // 3) Run Pylint
+    runPylint(doc, collection, out);
+    // 4) (Optional) Run Checkstyle‐regex  
     runCheckstyle(doc, collection, out);
 }
 exports.lintDocument = lintDocument;
-function runPmd(doc, collection, out) {
+function runPylint(doc, collection, out) {
     const file = doc.uri.fsPath;
-    if (!fs.existsSync(PMD_PYTHON_PLUGIN)) {
-        vscode.window.showErrorMessage('PMD Python plugin missing: place pmd-python-plugin.jar into the extension\'s lib/ folder.');
-        return;
-    }
-    const cmd = [
-        'pmd', 'check',
-        '--dir', `"${file}"`,
-        '--rulesets', `"${PMD_RULESET}"`,
-        '--format', 'xml',
-        '--aux-classpath', `"${PMD_PYTHON_PLUGIN}"`
-    ].join(' ');
-    out.appendLine(`🔍 [PMD] ${cmd}`);
-    cp.exec(cmd, { cwd: path.dirname(file), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-        if (stderr)
-            out.appendLine(`⚠️ [PMD] stderr:\n${stderr.trim()}`);
-        if (stderr.includes('Cannot resolve rule/ruleset') || stderr.includes('Unknown language')) {
-            vscode.window.showErrorMessage('PMD failed to load Python ruleset. Verify pmd-python-plugin.jar is in lib/ and matches your PMD version.');
-            return;
+    // 🚀 Use `pylint` from PATH, not workspace python
+    const pylintCmd = `pylint --output-format=json "${file}"`;
+    out.appendLine(`🔍 [Pylint] ${pylintCmd}`);
+    cp.exec(pylintCmd, { cwd: path.dirname(file), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        if (stderr) {
+            // If pylint isn’t installed or not on PATH, stderr will help us know
+            out.appendLine(`⚠️ [Pylint] stderr:\n${stderr.trim()}`);
+            if (stderr.includes('command not found') || stderr.includes('is not recognized')) {
+                vscode.window.showErrorMessage('Pylint not found on PATH. Please install pylint globally (e.g. `pip install pylint`).');
+                return;
+            }
+        }
+        let issues = [];
+        try {
+            issues = JSON.parse(stdout);
+        }
+        catch (e) {
+            out.appendLine(`❌ [Pylint] JSON parse error: ${e}`);
         }
         const diags = [];
-        if (stdout) {
-            try {
-                const json = parseXml(stdout);
-                const violations = json.pmd?.file?.violation || [];
-                for (const v of [].concat(violations)) {
-                    const line = parseInt(v['@_beginline'], 10);
-                    const col = parseInt(v['@_begincolumn'], 10);
-                    const msg = `[PMD ${v['@_rule']}] ${v['#text'].trim()}`;
-                    diags.push(toDiagnostic(doc.uri, line, col, msg, vscode.DiagnosticSeverity.Warning, 'pmd'));
-                }
-            }
-            catch (e) {
-                out.appendLine(`❌ [PMD] parse error: ${e}`);
-            }
+        for (const issue of issues) {
+            const line = issue.line || 1;
+            const col = issue.column || 1;
+            const sevMap = {
+                convention: vscode.DiagnosticSeverity.Information,
+                refactor: vscode.DiagnosticSeverity.Hint,
+                warning: vscode.DiagnosticSeverity.Warning,
+                error: vscode.DiagnosticSeverity.Error,
+                fatal: vscode.DiagnosticSeverity.Error
+            };
+            const sev = sevMap[issue.type] ?? vscode.DiagnosticSeverity.Warning;
+            const msgId = issue['message-id'] || issue['messageId'] || '';
+            const msg = `[${issue.symbol}] ${issue.message}${msgId ? ` (${msgId})` : ''}`;
+            diags.push(toDiagnostic(doc.uri, line, col, msg, sev, 'pylint'));
         }
-        out.appendLine(`✅ [PMD] ${diags.length} issue(s) found`);
-        collection.set(doc.uri, diags);
+        out.appendLine(`✅ [Pylint] ${diags.length} issue(s) found`);
+        const existing = collection.get(doc.uri) || [];
+        collection.set(doc.uri, existing.concat(diags));
     });
 }
 function runCheckstyle(doc, collection, out) {
+    const CHECKSTYLE_CFG = path.join(__dirname, '..', '..', 'checkstyle.xml');
     const file = doc.uri.fsPath;
-    // 1) Get user override
-    const userPath = vscode.workspace.getConfiguration('pymate').get('checkstyleConfigPath')?.trim() || '';
-    const cfgPath = userPath && fs.existsSync(userPath)
-        ? userPath
-        : DEFAULT_CHECKSTYLE;
-    out.appendLine(`🔍 [Checkstyle] using config: ${cfgPath}`);
-    // 2) Invoke Checkstyle
-    const cmd = `checkstyle -c "${cfgPath}" -f xml "${file}"`;
+    const cmd = `checkstyle -c "${CHECKSTYLE_CFG}" -f xml "${file}"`;
     out.appendLine(`🔍 [Checkstyle] ${cmd}`);
     cp.exec(cmd, { cwd: path.dirname(file), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
         if (stderr)
@@ -112,21 +109,16 @@ function runCheckstyle(doc, collection, out) {
         const existing = collection.get(doc.uri) || [];
         const diags = existing.slice();
         if (stdout) {
-            try {
-                const json = parseXml(stdout);
-                const errors = json.checkstyle?.file?.error || [];
-                for (const e of [].concat(errors)) {
-                    const line = parseInt(e['@_line'], 10);
-                    const col = parseInt(e['@_column'], 10);
-                    const sev = e['@_severity'] === 'error'
-                        ? vscode.DiagnosticSeverity.Error
-                        : vscode.DiagnosticSeverity.Warning;
-                    const msg = `[Checkstyle] ${e['@_message']}`;
-                    diags.push(toDiagnostic(doc.uri, line, col, msg, sev, 'checkstyle'));
-                }
-            }
-            catch (e) {
-                out.appendLine(`❌ [Checkstyle] parse error: ${e}`);
+            const json = parseXml(stdout);
+            const errors = json.checkstyle?.file?.error || [];
+            for (const e of [].concat(errors)) {
+                const line = parseInt(e['@_line'], 10);
+                const col = parseInt(e['@_column'], 10);
+                const sev = e['@_severity'] === 'error'
+                    ? vscode.DiagnosticSeverity.Error
+                    : vscode.DiagnosticSeverity.Warning;
+                const msg = `[Checkstyle] ${e['@_message']}`;
+                diags.push(toDiagnostic(doc.uri, line, col, msg, sev, 'checkstyle'));
             }
         }
         out.appendLine(`✅ [Checkstyle] ${diags.length - existing.length} new issue(s)`);
